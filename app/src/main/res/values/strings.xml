@@ -117,6 +117,8 @@
     <string name="advanced">Advanced</string>
     <string name="advanced_mode">Advanced mode</string>
     <string name="advanced_mode_description">Manually choose a device-compatible payload during installation</string>
+    <string name="advanced_live_log">Live exploit log</string>
+    <string name="advanced_live_log_description">Stream exploit output to the installer while it runs. Disabling avoids file writes during the exploit window; the log is still saved to run history.</string>
     <string name="repo_profile_missing">Support profile %1$s is no longer available</string>
     <string name="select_device_title">Choose a payload</string>
     <string name="select_device_description">Select a payload by device model and kernel version.</string>

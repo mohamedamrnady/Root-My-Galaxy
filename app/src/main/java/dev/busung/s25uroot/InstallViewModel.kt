@@ -58,6 +58,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private var discoveryJob: Job? = null
     private var installJob: Job? = null
     private var activeHistoryEntry: InstallHistoryEntry? = null
+    private var lastHiddenExploitLog: String? = null
     val state: StateFlow<InstallUiState> = mutableState.asStateFlow()
     val history: StateFlow<List<InstallHistoryEntry>> = mutableHistory.asStateFlow()
     val targetCatalog: StateFlow<TargetCatalogUiState> = mutableTargetCatalog.asStateFlow()
@@ -128,6 +129,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 probeOutput = mutableState.value.probeOutput,
             )
             startHistory()
+            var exploitLogOverride: String? = null
             try {
                 setPhase(InstallPhase.Checking, app.getString(R.string.status_checking_github))
                 val profile = if (profileId == null) {
@@ -142,28 +144,29 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 appendLog(app.getString(R.string.log_download_verified))
 
                 setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
-                executeExploit(payloads.exploit)
+                exploitLogOverride = executeExploit(payloads.exploit)
 
                 setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
                 installKernelSu(payloads)
 
                 setPhase(InstallPhase.Installed, app.getString(R.string.status_ksu_active))
                 appendLog(app.getString(R.string.log_install_complete))
-                finishHistory(InstallRunResult.Succeeded)
+                finishHistory(InstallRunResult.Succeeded, exploitLogOverride)
             } catch (error: Throwable) {
                 appendLog("[-] ${error.message ?: error.javaClass.simpleName}")
                 setPhase(InstallPhase.Failed, app.getString(R.string.status_install_failed))
-                finishHistory(InstallRunResult.Failed)
+                finishHistory(InstallRunResult.Failed, exploitLogOverride)
             }
         }
     }
 
-    private suspend fun executeExploit(payload: File) {
+    private suspend fun executeExploit(payload: File): String? {
         val logFile = File(app.filesDir, "exploit.log")
         logFile.delete()
         val helper = helperFile()
         require(helper.canExecute()) { app.getString(R.string.error_helper_unavailable) }
         val logPrefix = mutableState.value.log
+        val relayLive = AppPreferences.exploitLiveLogRelayEnabled(app)
         val bootToken = currentBootToken()
         val processBuilder = ProcessBuilder(
             helper.absolutePath,
@@ -184,13 +187,22 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             val startedAt = SystemClock.elapsedRealtime()
             var lastProgressAt = startedAt
             var lastRawLog = ""
+            var lastLogSize = -1L
             while (process.isAlive) {
-                val rawLog = logFile.readTextIfPresent()
-                if (rawLog != lastRawLog) {
-                    cacheP0Offset(bootToken, rawLog)
-                    publishExploitLog(logPrefix, rawLog)
-                    lastRawLog = rawLog
-                    lastProgressAt = SystemClock.elapsedRealtime()
+                if (relayLive) {
+                    val rawLog = logFile.readTextIfPresent()
+                    if (rawLog != lastRawLog) {
+                        cacheP0Offset(bootToken, rawLog)
+                        publishExploitLog(logPrefix, rawLog)
+                        lastRawLog = rawLog
+                        lastProgressAt = SystemClock.elapsedRealtime()
+                    }
+                } else {
+                    val size = logFile.length()
+                    if (size != lastLogSize) {
+                        lastLogSize = size
+                        lastProgressAt = SystemClock.elapsedRealtime()
+                    }
                 }
                 val now = SystemClock.elapsedRealtime()
                 require(now - lastProgressAt < EXPLOIT_STALL_MILLIS) {
@@ -205,8 +217,15 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             val exitCode = process.waitFor()
             val rawLog = logFile.readTextIfPresent()
             cacheP0Offset(bootToken, rawLog)
-            publishExploitLog(logPrefix, rawLog)
             val earlyOutput = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            if (relayLive) {
+                publishExploitLog(logPrefix, rawLog)
+            } else {
+                val hidden = stripAnsi(rawLog)
+                lastHiddenExploitLog = listOf(stripAnsi(logPrefix), hidden)
+                    .filter(String::isNotBlank)
+                    .joinToString("\n")
+            }
             require(exitCode == 0) {
                 app.getString(
                     R.string.error_payload_exit,
@@ -223,8 +242,17 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 delay(500.milliseconds)
                 if (process.isAlive) process.destroyForcibly()
             }
+            if (!relayLive && lastHiddenExploitLog == null) {
+                val hidden = stripAnsi(logFile.readTextIfPresent())
+                lastHiddenExploitLog = listOf(stripAnsi(logPrefix), hidden)
+                    .filter(String::isNotBlank)
+                    .joinToString("\n")
+            }
         }
         appendLog(app.getString(R.string.log_bootstrap_root))
+        val override = lastHiddenExploitLog
+        lastHiddenExploitLog = null
+        return override
     }
 
     private fun publishExploitLog(prefix: String, rawLog: String) {
@@ -343,12 +371,12 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         publishHistory(updated)
     }
 
-    private fun finishHistory(result: InstallRunResult) {
+    private fun finishHistory(result: InstallRunResult, logOverride: String? = null) {
         val entry = activeHistoryEntry ?: return
         val completed = entry.copy(
             completedAtMillis = System.currentTimeMillis(),
             result = result,
-            log = mutableState.value.log,
+            log = logOverride ?: mutableState.value.log,
         )
         activeHistoryEntry = null
         historyStore.save(completed)

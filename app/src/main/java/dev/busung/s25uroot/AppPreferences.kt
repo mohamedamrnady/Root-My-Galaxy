@@ -33,6 +33,7 @@ object AppPreferences {
     private const val ACCENT_COLOR = "accent_color"
     private const val THEME_MODE = "theme_mode"
     private const val ADVANCED_MODE = "advanced_mode"
+    private const val EXPLOIT_LIVE_LOG = "exploit_live_log"
     private const val CONSUMED_INSTALL_REQUEST = "consumed_install_request"
 
     fun accentColor(context: Context): AccentColor = AccentColor.fromStoredValue(
@@ -67,6 +68,17 @@ object AppPreferences {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(ADVANCED_MODE, enabled)
+            .apply()
+    }
+
+    fun exploitLiveLogRelayEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(EXPLOIT_LIVE_LOG, true)
+
+    fun setExploitLiveLogRelay(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(EXPLOIT_LIVE_LOG, enabled)
             .apply()
     }
 
